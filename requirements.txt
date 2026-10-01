@@ -1,0 +1,7 @@
+streamlit
+pandas
+folium
+streamlit-folium
+chief_complaints.csv
+patient_history.csv
+ubs_data.csv
