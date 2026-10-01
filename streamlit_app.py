@@ -1,169 +1,190 @@
-import os
-import pandas as pd
 import streamlit as st
-import folium
-from streamlit_folium import st_folium
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import plotly.express as px
+import plotly.graph_objects as go
 
-# -----------------------------------------------------------------------------
-# Configuração da página no Streamlit
-# -----------------------------------------------------------------------------
+# Configuração da página (deve ser a primeira chamada do Streamlit)
 st.set_page_config(
-    page_title="Sistema de Triagem e Encaminhamento Hospital/UBS",
-    page_icon="🏥",
-    layout="wide"
+    page_title="IA de Triagem Médica",
+    page_icon="⚕️",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Estilização CSS e Banner
-st.markdown("""
-    <style>
-    .stApp { background-color: #f8f9fa; }
-    .banner-aviso {
-        background-color: #fff3cd; color: #856404; padding: 12px;
-        border-radius: 6px; border: 1px solid #ffeeba; text-align: center;
-        font-weight: bold; margin-bottom: 20px;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# ==========================================
+# 1. CARREGAMENTO E PREPARAÇÃO DOS DADOS
+# ==========================================
 
-st.markdown(
-    '<div class="banner-aviso">⚠ PROTÓTIPO ACADÊMICO — USO SIMULADO PARA DEMONSTRAÇÃO E APRESENTAÇÃO INSTITUCIONAL</div>',
-    unsafe_allow_html=True
-)
-
-st.title("🏥 Sistema de Triagem e Vínculo Hospital ↔ UBS")
-st.subheader("Redirecionamento Inteligente de Casos de Baixa Urgência")
-
-# -----------------------------------------------------------------------------
-# Carregamento dos Datasets (com Cache)
-# -----------------------------------------------------------------------------
 @st.cache_data
-def load_datasets():
-    if os.path.exists('chief_complaints.csv'):
-        df_complaints = pd.read_csv('chief_complaints.csv')
-    else:
-        df_complaints = pd.DataFrame({
-            'queixa': [
-                "Sintomas Gripais / Coriza",
-                "Dor de cabeça leve / Tensão",
-                "Renovação de Receita / Atestado",
-                "Dor no Peito / Falta de Ar",
-                "Trauma com Suspeita de Fratura",
-                "Febre Alta Persistentemente acima de 39°C"
-            ]
-        })
-
-    if os.path.exists('patient_history.csv'):
-        df_patients = pd.read_csv('patient_history.csv')
-    else:
-        df_patients = pd.DataFrame([
-            {"nome": "João da Silva", "idade": 35, "fc": 78, "pas": 120, "spo2": 98, "temp": 36.6, "dor": 2, "queixa": "Sintomas Gripais / Coriza"},
-            {"nome": "Maria Oliveira", "idade": 62, "fc": 115, "pas": 160, "spo2": 91, "temp": 38.5, "dor": 8, "queixa": "Dor no Peito / Falta de Ar"}
-        ])
-
-    if os.path.exists('ubs_data.csv'):
-        df_ubs = pd.read_csv('ubs_data.csv')
-    else:
-        df_ubs = pd.DataFrame([
-            {"id": "UBS01", "nome": "UBS Central", "lat": -16.6800, "lon": -49.2550, "dist_km": 1.2, "espera_min": 15, "vagas_hoje": 8, "tipo": "UBS"},
-            {"id": "UBS02", "nome": "UBS Jardim América", "lat": -16.6950, "lon": -49.2700, "dist_km": 2.8, "espera_min": 10, "vagas_hoje": 12, "tipo": "UBS"},
-            {"id": "UBS03", "nome": "UBS Vila Nova", "lat": -16.6700, "lon": -49.2400, "dist_km": 3.5, "espera_min": 25, "vagas_hoje": 5, "tipo": "UBS"},
-            {"id": "HOSP01", "nome": "Hospital Municipal (Pronto Socorro)", "lat": -16.6860, "lon": -49.2640, "dist_km": 0.0, "espera_min": 180, "vagas_hoje": 0, "tipo": "Hospital"}
-        ])
-
-    return df_complaints, df_patients, df_ubs
-
-df_complaints, df_patients, UBS_DATA = load_datasets()
-
-queixas_options = df_complaints['queixa'].dropna().unique().tolist() if 'queixa' in df_complaints.columns else df_complaints.iloc[:, 0].tolist()
-
-# -----------------------------------------------------------------------------
-# Interface Principal
-# -----------------------------------------------------------------------------
-col1, col2 = st.columns([1, 1.2])
-
-with col1:
-    st.markdown("### 📋 Ficha de Entrada do Paciente")
+def load_or_generate_data():
+    """
+    Simula o dataset TriageGeist para o protótipo.
+    Para usar seu arquivo CSV real, substitua o conteúdo desta função por:
+    return pd.read_csv('triagegeist.csv')
+    """
+    np.random.seed(42)
+    n_samples = 1000
     
-    usar_historico = st.checkbox("Carregar dados de paciente cadastrado no dataset")
+    # Gerando dados sintéticos baseados em parâmetros vitais
+    data = {
+        'Idade': np.random.randint(1, 90, n_samples),
+        'Pressao_Sistolica': np.random.normal(120, 20, n_samples),
+        'Frequencia_Cardiaca': np.random.normal(80, 15, n_samples),
+        'Temperatura': np.random.normal(36.8, 0.8, n_samples),
+        'Saturacao_O2': np.random.normal(97, 3, n_samples),
+        'Nivel_Dor': np.random.randint(0, 11, n_samples),
+        'Glasgow': np.random.choice([15, 14, 13, 12, 9, 8], n_samples, p=[0.8, 0.05, 0.05, 0.05, 0.03, 0.02])
+    }
+    df = pd.DataFrame(data)
     
-    paciente_sel = None
-    if usar_historico and not df_patients.empty:
-        nomes_pacientes = df_patients['nome'].tolist() if 'nome' in df_patients.columns else [f"Paciente {i+1}" for i in range(len(df_patients))]
-        idx_paciente = st.selectbox("Selecione o Paciente do Dataset", range(len(nomes_pacientes)), format_func=lambda x: nomes_pacientes[x])
-        paciente_sel = df_patients.iloc[idx_paciente]
-
-    val_nome = str(paciente_sel['nome']) if paciente_sel is not None and 'nome' in paciente_sel else "João da Silva"
-    val_idade = int(paciente_sel['idade']) if paciente_sel is not None and 'idade' in paciente_sel else 35
-    val_fc = int(paciente_sel['fc']) if paciente_sel is not None and 'fc' in paciente_sel else 78
-    val_pas = int(paciente_sel['pas']) if paciente_sel is not None and 'pas' in paciente_sel else 120
-    val_spo2 = int(paciente_sel['spo2']) if paciente_sel is not None and 'spo2' in paciente_sel else 98
-    val_temp = float(paciente_sel['temp']) if paciente_sel is not None and 'temp' in paciente_sel else 36.6
-    val_dor = int(paciente_sel['dor']) if paciente_sel is not None and 'dor' in paciente_sel else 2
+    # Clipando valores para limites realistas
+    df['Saturacao_O2'] = df['Saturacao_O2'].clip(70, 100)
+    df['Pressao_Sistolica'] = df['Pressao_Sistolica'].clip(70, 220)
     
-    queixa_default_idx = 0
-    if paciente_sel is not None and 'queixa' in paciente_sel and paciente_sel['queixa'] in queixas_options:
-        queixa_default_idx = queixas_options.index(paciente_sel['queixa'])
-
-    nome = st.text_input("Nome do Paciente", value=val_nome)
-    idade = st.number_input("Idade", min_value=0, max_value=120, value=val_idade)
+    # Criando a variável alvo (Destino: 0 = UBS, 1 = Hospital/UPA)
+    # Regra lógica para o modelo aprender: sinais vitais alterados = Hospital
+    df['Destino'] = np.where(
+        (df['Saturacao_O2'] < 92) | 
+        (df['Frequencia_Cardiaca'] > 120) | 
+        (df['Frequencia_Cardiaca'] < 50) |
+        (df['Pressao_Sistolica'] > 180) |
+        (df['Glasgow'] < 14) |
+        (df['Nivel_Dor'] >= 8), 
+        1, 0
+    )
     
-    st.markdown("**Sinais Vitais & Sintomas**")
-    c1, c2 = st.columns(2)
-    with c1:
-        fc = st.number_input("Frequência Cardíaca (bpm)", 40, 200, val_fc)
-        pas = st.number_input("PA Sistólica (mmHg)", 70, 220, val_pas)
-        spo2 = st.number_input("Saturação de O₂ (%)", 70, 100, val_spo2)
-    with c2:
-        temp = st.number_input("Temperatura (°C)", 35.0, 42.0, val_temp, step=0.1)
-        dor = st.slider("Nível de Dor (0 a 10)", 0, 10, val_dor)
-        queixa = st.selectbox("Queixa Principal (Base do Dataset)", queixas_options, index=queixa_default_idx)
-
-    btn_analisar = st.button("🔍 ANALISAR E CLASSIFICAR", type="primary", use_container_width=True)
-
-with col2:
-    st.markdown("### 🎯 Resultado da Triagem")
+    # Adicionando um pouco de ruído para o modelo não ficar 100% perfeito (realismo)
+    ruido = np.random.choice([0, 1], n_samples, p=[0.95, 0.05])
+    df['Destino'] = np.abs(df['Destino'] - ruido)
     
-    if btn_analisar or 'classificado' not in st.session_state:
-        st.session_state['classificado'] = True
+    return df
+
+@st.cache_resource
+def train_model(df):
+    """Treina o modelo Random Forest com os dados fornecidos."""
+    X = df.drop('Destino', axis=1)
+    y = df['Destino']
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=5)
+    model.fit(X_train, y_train)
+    
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    return model, X, accuracy, y_test, y_pred
+
+# Carregar dados e treinar modelo
+df = load_or_generate_data()
+model, X_features, accuracy, y_test, y_pred = train_model(df)
+
+# ==========================================
+# 2. INTERFACE DE NAVEGAÇÃO (SIDEBAR)
+# ==========================================
+
+st.sidebar.title("⚕️️ Menu de Navegação")
+pagina = st.sidebar.radio("Selecione a página:", ["Triagem de Pacientes", "Dashboard & Performance da IA"])
+
+st.sidebar.markdown("---")
+st.sidebar.info(
+    "**Protótipo de Triagem Inteligente**\n\n"
+    "Este modelo utiliza Machine Learning para sugerir o encaminhamento adequado "
+    "entre Atenção Básica (UBS) e Urgência/Emergência (Hospital)."
+)
+
+# ==========================================
+# 3. PÁGINA 1: FORMULÁRIO DE TRIAGEM
+# ==========================================
+
+if pagina == "Triagem de Pacientes":
+    st.title("Triagem Inteligente de Pacientes")
+    st.write("Insira os sinais vitais e informações do paciente para receber a recomendação de direcionamento.")
+    
+    with st.form("triage_form"):
+        col1, col2, col3 = st.columns(3)
         
-        is_critico = (spo2 < 92) or (pas > 180) or (fc > 130) or ("Peito" in queixa) or ("Trauma" in queixa) or (dor >= 8)
+        with col1:
+            idade = st.number_input("Idade", min_value=0, max_value=120, value=30)
+            pas = st.number_input("Pressão Sistólica (mmHg)", min_value=50, max_value=250, value=120)
+            fc = st.number_input("Freq. Cardíaca (bpm)", min_value=30, max_value=220, value=80)
+            
+        with col2:
+            temp = st.number_input("Temperatura (°C)", min_value=30.0, max_value=43.0, value=36.5, step=0.1)
+            sat = st.number_input("Saturação O2 (%)", min_value=50, max_value=100, value=98)
+            
+        with col3:
+            dor = st.slider("Nível de Dor (0-10)", 0, 10, 0)
+            glasgow = st.selectbox("Escala de Glasgow", [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3], index=0)
+            
+        submit_button = st.form_submit_button(label="Realizar Triagem")
         
-        if is_critico:
-            nivel = "Nível 2 — Muito Urgente (Laranja)" if dor >= 8 else "Nível 1 — Emergência (Vermelho)"
-            st.error(f"**PRIORIDADE ALTA:** {nivel}")
-            st.warning("🚨 **ENCAMINHAMENTO:** Manter atendimento no **Hospital Municipal (Ficha de Emergência)**.")
-            st.metric(label="Tempo Estimado para Atendimento Hospitalar", value="Imediato / Atendimento Prioritário")
+    if submit_button:
+        # Preparar dados para predição
+        input_data = pd.DataFrame([[idade, pas, fc, temp, sat, dor, glasgow]], 
+                                  columns=X_features.columns)
+        
+        # Realizar predição e probabilidade
+        prediction = model.predict(input_data)[0]
+        probabilidade = model.predict_proba(input_data)[0]
+        
+        st.markdown("---")
+        st.subheader("Resultado da Triagem")
+        
+        if prediction == 0:
+            st.success("🟢 **Recomendação: Unidade Básica de Saúde (UBS)**")
+            st.write(f"**Confiança da IA:** {probabilidade[0]*100:.1f}%")
+            st.write("*Motivo principal:* Sinais vitais estáveis. O paciente não apresenta critérios de urgência/emergência imediatos. O caso pode ser acompanhado na Atenção Básica.")
         else:
-            nivel = "Nível 4 — Pouco Urgente (Verde)" if dor > 3 else "Nível 5 — Não Urgente (Azul)"
-            st.success(f"**PRIORIDADE LEVE:** {nivel}")
-            st.info("💡 **RECOMENDAÇÃO:** Encaminhar para Unidade Básica de Saúde (UBS). Fila de espera no Hospital Municipal estimada em **3 horas**.")
-            
-            ubss_validas = UBS_DATA[UBS_DATA['tipo'] == 'UBS'].copy()
-            
-            if not ubss_validas.empty:
-                ubss_validas['score'] = (ubss_validas['vagas_hoje'] * 2) - (ubss_validas['dist_km'] * 1.5) - (ubss_validas['espera_min'] * 0.5)
-                melhor_ubs = ubss_validas.sort_values(by='score', ascending=False).iloc[0]
-                
-                st.markdown(f"#### 🏥 UBS Recomendada: **{melhor_ubs['nome']}**")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Distância", f"{melhor_ubs['dist_km']} km")
-                m2.metric("Tempo de Espera", f"~{melhor_ubs['espera_min']} min")
-                m3.metric("Encaixes Hoje", f"{melhor_ubs['vagas_hoje']} vagas")
+            st.error("🔴 **Recomendação: Hospital / UPA (Urgência/Emergência)**")
+            st.write(f"**Confiança da IA:** {probabilidade[1]*100:.1f}%")
+            st.write("*Motivo principal:* Foram detectadas alterações em sinais vitais críticos (ex: saturação, dor intensa ou alteração de consciência) que exigem avaliação médica imediata e recursos hospitalares.")
 
-    st.markdown("### 🗺️ Rede de Atendimento Próxima")
+# ==========================================
+# 4. PÁGINA 2: DASHBOARD & PERFORMANCE
+# ==========================================
+
+elif pagina == "Dashboard & Performance da IA":
+    st.title("Visão Geral do Dataset e Performance do Modelo")
     
-    lat_centro = UBS_DATA['lat'].mean() if 'lat' in UBS_DATA.columns else -16.6860
-    lon_centro = UBS_DATA['lon'].mean() if 'lon' in UBS_DATA.columns else -49.2640
+    # Métricas principais
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total de Registros (Dataset)", len(df))
+    col2.metric("Acurácia do Modelo", f"{accuracy*100:.2f}%")
     
-    m = folium.Map(location=[lat_centro, lon_centro], zoom_start=13)
+    casos_hospital = len(df[df['Destino'] == 1])
+    col3.metric("Casos Históricos Hospitalares", f"{(casos_hospital/len(df))*100:.1f}%")
     
-    for _, row in UBS_DATA.iterrows():
-        color = "red" if row['tipo'] == 'Hospital' else "green"
-        folium.Marker(
-            location=[row['lat'], row['lon']],
-            popup=f"{row['nome']} - Espera: {row['espera_min']} min",
-            tooltip=row['nome'],
-            icon=folium.Icon(color=color, icon="plus-sign" if row['tipo'] == 'Hospital' else "home")
-        ).add_to(m)
+    st.markdown("---")
+    
+    row1_col1, row1_col2 = st.columns(2)
+    
+    with row1_col1:
+        st.subheader("Importância das Variáveis (O que a IA mais avalia?)")
+        # Gráfico de Feature Importance
+        importances = model.feature_importances_
+        feat_imp_df = pd.DataFrame({'Feature': X_features.columns, 'Importância': importances})
+        feat_imp_df = feat_imp_df.sort_values(by='Importância', ascending=True)
         
-    st_folium(m, width=650, height=280)
+        fig_imp = px.bar(feat_imp_df, x='Importância', y='Feature', orientation='h',
+                         color='Importância', color_continuous_scale='Blues')
+        st.plotly_chart(fig_imp, use_container_width=True)
+        
+    with row1_col2:
+        st.subheader("Distribuição de Encaminhamentos")
+        # Gráfico de Pizza do Destino
+        dist_df = df['Destino'].map({0: 'UBS (Baixa Complexidade)', 1: 'Hospital (Alta Complexidade)'}).value_counts().reset_index()
+        dist_df.columns = ['Destino', 'Contagem']
+        
+        fig_pie = px.pie(dist_df, values='Contagem', names='Destino', 
+                         color='Destino', color_discrete_map={'UBS (Baixa Complexidade)':'#2ca02c', 'Hospital (Alta Complexidade)':'#d62728'},
+                         hole=0.4)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("Amostra do Dataset TriageGeist")
+    st.dataframe(df.head(15), use_container_width=True)
